@@ -1,4 +1,4 @@
-# app.py — ARAM 챔피언 대시보드 (슈퍼라이트2 대응/ARAM 전용/아이콘 렌더 고정)
+# app.py — ARAM 대시보드 (필터 제거, 룬/스펠 역매핑 + 한글화)
 import os, re
 import pandas as pd
 import streamlit as st
@@ -87,13 +87,6 @@ champ_map = load_champion_icons(CHAMP_CSV)
 rune_maps = load_rune_icons(RUNE_CSV)
 spell_map = load_spell_icons(SPELL_CSV)
 
-# ---- ARAM(칼바람)만 필터 (queueId = 450) ----
-if "queueId" in df.columns:
-    df = df[df["queueId"].astype(str) == "450"].copy()
-else:
-    # queueId가 없으면 그대로 두되, 로그로 알려줌
-    st.info("`queueId` 컬럼이 없어 ARAM 필터를 건너뜁니다. (슈퍼라이트2 생성 시 queueId를 포함하면 더 안전해요)")
-
 # ===== 사이드바 =====
 st.sidebar.title("ARAM PS Controls")
 champs = sorted(df["champion"].dropna().unique().tolist()) if "champion" in df.columns else []
@@ -156,7 +149,7 @@ if games and item_name_cols and item_icon_cols:
 else:
     st.info("아이템 이름/아이콘 컬럼이 없어 아이템 집계를 만들 수 없습니다. (item*_name, item*_icon 필요)")
 
-# ===== 스펠 추천 (순서무시 통합 + URL 복원) =====
+# ===== 스펠 추천 (순서무시 통합 + URL/ID → 한글화) =====
 st.subheader("Recommended Spell Combos")
 
 # 표준 한글명 <-> DDragon 키
@@ -242,8 +235,42 @@ if games and mode:
 else:
     st.info("스펠 컬럼을 찾지 못했습니다. (spell1Id or spell1_name_fix / spell1 필요)")
 
-# ===== 룬 추천 (행 단위 URL 판별로 아이콘/이름 교정) =====
+# ===== 룬 추천 (URL → 이름 역매핑: 트리/키스톤, 한글화) =====
 st.subheader("Recommended Rune Combos")
+
+# 트리 영→한
+STYLE_EN2KO = {
+    "Precision":"정밀", "Domination":"지배", "Resolve":"결의", "Sorcery":"마법", "Inspiration":"영감"
+}
+# 키스톤 영→한
+KEYSTONE_EN2KO = {
+    # Precision
+    "PressTheAttack":"집중 공격", "LethalTempo":"치명적 속도", "FleetFootwork":"기민한 발놀림", "Conqueror":"정복자",
+    # Domination
+    "Electrocute":"감전", "DarkHarvest":"어둠의 수확", "HailOfBlades":"칼날비",
+    # Sorcery
+    "SummonAery":"콩콩이 소환", "ArcaneComet":"신비로운 유성", "PhaseRush":"난입",
+    # Resolve
+    "GraspOfTheUndying":"착취의 손아귀", "Aftershock":"여진", "Guardian":"수호자",
+    # Inspiration
+    "GlacialAugment":"빙결 강화", "UnsealedSpellbook":"봉인 풀린 주문서", "FirstStrike":"선제공격",
+}
+
+def infer_style_key(val: str) -> str:
+    if not isinstance(val, str): return ""
+    # .../Styles/7201_Precision.png  또는 .../Styles/Precision/...
+    m = re.search(r'(?:_|/)(Precision|Domination|Resolve|Sorcery|Inspiration)(?:\.png|/)', val)
+    return m.group(1) if m else ""
+
+def infer_keystone_key(val: str) -> str:
+    if not isinstance(val, str): return ""
+    # .../Styles/Resolve/Aftershock/Aftershock.png  또는 마지막 파일명
+    m = re.search(r'/Styles/(?:Precision|Domination|Resolve|Sorcery|Inspiration)/([A-Za-z0-9]+)/', val)
+    key = m.group(1) if m else ""
+    if not key:
+        m2 = re.search(r'/([A-Za-z0-9]+)\.png$', val)
+        key = m2.group(1) if m2 else ""
+    return key
 
 if games and {"rune_core","rune_sub"}.issubset(dsel.columns):
     ru = (
@@ -257,14 +284,22 @@ if games and {"rune_core","rune_sub"}.issubset(dsel.columns):
     core_is_url = ru["rune_core"].astype(str).str.startswith(("http://","https://"))
     sub_is_url  = ru["rune_sub"].astype(str).str.startswith(("http://","https://"))
 
+    # 외부 매핑 (있을 때만 사용)
     core_map = rune_maps.get("core", {})
     sub_map  = rune_maps.get("sub",  {})
 
+    # 아이콘
     ru["rune_core_icon"] = ru["rune_core"].where(core_is_url, ru["rune_core"].map(core_map).fillna(""))
-    ru["rune_core_name"] = ru["rune_core"].where(~core_is_url, "")
-
     ru["rune_sub_icon"]  = ru["rune_sub"].where(sub_is_url,  ru["rune_sub"].map(sub_map).fillna(""))
-    ru["rune_sub_name"]  = ru["rune_sub"].where(~sub_is_url, "")
+
+    # 이름(역매핑 → 한글화)
+    # core: keystone, sub: style
+    ru["rune_core_name"] = ru["rune_core"].where(~core_is_url, ru["rune_core"].apply(lambda v: KEYSTONE_EN2KO.get(infer_keystone_key(v), infer_keystone_key(v))))
+    ru["rune_sub_name"]  = ru["rune_sub"].where(~sub_is_url,  ru["rune_sub"].apply(lambda v: STYLE_EN2KO.get(infer_style_key(v), infer_style_key(v))))
+
+    # URL이 아니라 영어 키/이름이 이미 들어온 경우도 한글화 시도
+    ru.loc[~core_is_url, "rune_core_name"] = ru.loc[~core_is_url, "rune_core"].map(KEYSTONE_EN2KO).fillna(ru.loc[~core_is_url, "rune_core"])
+    ru.loc[~sub_is_url,  "rune_sub_name"]  = ru.loc[~sub_is_url,  "rune_sub"].map(STYLE_EN2KO).fillna(ru.loc[~sub_is_url,  "rune_sub"])
 
     ru = ru.sort_values(["games","win_rate"], ascending=[False,False]).head(10)
     st.dataframe(
