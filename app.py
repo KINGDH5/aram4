@@ -88,7 +88,11 @@ rune_maps = load_rune_icons(RUNE_CSV)
 spell_map = load_spell_icons(SPELL_CSV)
 
 # ---- ARAM(칼바람)만 필터 (queueId = 450) ----
-df = df[df.get("queueId", 450).astype(str) == "450"].copy()
+if "queueId" in df.columns:
+    df = df[df["queueId"].astype(str) == "450"].copy()
+else:
+    # queueId가 없으면 그대로 두되, 로그로 알려줌
+    st.info("`queueId` 컬럼이 없어 ARAM 필터를 건너뜁니다. (슈퍼라이트2 생성 시 queueId를 포함하면 더 안전해요)")
 
 # ===== 사이드바 =====
 st.sidebar.title("ARAM PS Controls")
@@ -198,7 +202,6 @@ if games and mode:
         tmp["n1"] = tmp["k1"].map(DDRAGON_TO_KOR).fillna(tmp["k1"])
         tmp["n2"] = tmp["k2"].map(DDRAGON_TO_KOR).fillna(tmp["k2"])
     else:
-        # 이름 모드: 한글 표준이면 그대로, 아니면 표시용은 원문
         def to_key(name: str) -> str:
             n = str(name).strip()
             return KOR_TO_DDRAGON.get(n, "")
